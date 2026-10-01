@@ -25,6 +25,7 @@ from orchestrator import (
 )
 from bot_monitor import BOTS, query_bot_metrics, get_all_bot_metrics, check_targets
 from bot_iterator import generate_proposal, format_proposal_telegram
+from launch_rails import LaunchValidationError, execute_bankr, prepare_launch_plan
 
 
 # ─── Config ───────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ async def lifespan(app: FastAPI):
 
 # ─── App ──────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Phantom Pipeline — Dev Orchestrator", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="Phantom Pipeline — Dev Orchestrator", version="3.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -135,6 +136,16 @@ class AdvancePhase(BaseModel):
 
 class GenerateExport(BaseModel):
     include_code_samples: bool = True
+
+class AgentLaunchRequest(BaseModel):
+    name: str
+    symbol: str
+    description: str
+    evm_wallet: str
+    solana_wallet: Optional[str] = None
+    image_url: Optional[str] = None
+    website_url: Optional[str] = None
+    tweet_url: Optional[str] = None
 
 
 # ─── Telegram notify ─────────────────────────────────────────────────
@@ -664,8 +675,37 @@ async def list_iterations(status: str = Query("pending")):
     return [dict(r) for r in rows]
 
 
+# ─── Launch Rails: Musepad + Bankr + OrcaPod ─────────────────────────
+
+@app.post("/launch/plan")
+async def launch_plan(body: AgentLaunchRequest):
+    """Translate one agent manifest into the Musepad, Bankr, and OrcaPod rails.
+
+    OrcaPod remains fail-closed until its client-rendered API schema is verified.
+    """
+    try:
+        return prepare_launch_plan(body.model_dump())
+    except LaunchValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/launch/bankr")
+async def launch_bankr(body: AgentLaunchRequest, live: bool = Query(False)):
+    """Prepare or execute the documented Bankr Robinhood/musebook launch rail.
+
+    live=false never sends a request. live=true additionally requires the
+    server-side BANKR_ALLOW_LIVE=1 guard and BANKR_API_KEY.
+    """
+    try:
+        return await execute_bankr(body.model_dump(), live=live)
+    except LaunchValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+
 # ─── Health ───────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "service": "phantom-pipeline", "version": "3.1.0"}
+    return {"status": "alive", "service": "phantom-pipeline", "version": "3.2.0"}
